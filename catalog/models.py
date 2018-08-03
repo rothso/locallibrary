@@ -13,6 +13,15 @@ class Genre(models.Model):
         return self.name
 
 
+class Language(models.Model):
+    """Model representing a book's natural language"""
+    name = models.CharField(max_length=200, help_text='Enter a language (e.g. English, French)')
+
+    def __str__(self):
+        """String for representing the language object"""
+        return self.name
+
+
 class Author(models.Model):
     """Model representing an author"""
     first_name = models.CharField(max_length=100)
@@ -39,6 +48,7 @@ class Book(models.Model):
     summary = models.TextField(max_length=1000, help_text='Enter a brief description of the book')
     isbn = models.CharField('ISBN', max_length=13, help_text='13 Character ISBN number')
     genre = models.ManyToManyField(Genre, help_text="Select a genre for this book")
+    language = models.ForeignKey(Language, on_delete=models.SET_NULL, null=True)
 
     def __str__(self):
         """String for representing the book object"""
