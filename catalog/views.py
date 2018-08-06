@@ -1,7 +1,13 @@
+import datetime
+
+from django.contrib.auth.decorators import permission_required
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
-from django.shortcuts import render
+from django.http import HttpResponseRedirect
+from django.shortcuts import render, get_object_or_404
+from django.urls import reverse
 from django.views import generic
 
+from .forms import RenewBookForm
 from .models import Author, Book, BookInstance, Genre
 
 
@@ -77,3 +83,24 @@ class AllLoanedBooksListView(PermissionRequiredMixin, generic.ListView):
 
     # Only librarians can access this page
     permission_required = 'catalog.can_mark_returned'
+
+
+@permission_required('catalog.can_mark_returned')
+def renew_book(request, pk):
+    book_instance = get_object_or_404(BookInstance, pk=pk)
+
+    if request.method == 'POST':
+        # Bind the form to the data from the request
+        form = RenewBookForm(request.POST)
+
+        if form.is_valid():
+            # Write the data to the model and save it to the database
+            book_instance.due_back = form.cleaned_data['renewal_date']
+            book_instance.save()
+            return HttpResponseRedirect(reverse('all-borrowed'))
+    else:
+        # Create an unbound form with a suggested renewal date
+        proposed_renew_date = datetime.date.today() + datetime.timedelta(weeks=3)
+        form = RenewBookForm(initial={'renewal_date': proposed_renew_date})
+
+    return render(request, 'catalog/book_renew.html', {'form': form, 'bookinst': book_instance})
