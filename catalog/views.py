@@ -4,8 +4,9 @@ from django.contrib.auth.decorators import permission_required
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.http import HttpResponseRedirect
 from django.shortcuts import render, get_object_or_404
-from django.urls import reverse
+from django.urls import reverse, reverse_lazy
 from django.views import generic
+from django.views.generic.edit import CreateView, UpdateView, DeleteView
 
 from .forms import RenewBookForm
 from .models import Author, Book, BookInstance, Genre
@@ -104,3 +105,21 @@ def renew_book(request, pk):
         form = RenewBookForm(initial={'renewal_date': proposed_renew_date})
 
     return render(request, 'catalog/book_renew.html', {'form': form, 'bookinst': book_instance})
+
+
+class AuthorCreate(PermissionRequiredMixin, CreateView):
+    model = Author
+    fields = '__all__'
+    permission_required = 'catalog.add_author'
+
+
+class AuthorUpdate(PermissionRequiredMixin, UpdateView):
+    model = Author
+    fields = ['first_name', 'last_name', 'date_of_birth', 'date_of_death']
+    permission_required = 'catalog.change_author'
+
+
+class AuthorDelete(PermissionRequiredMixin, DeleteView):
+    model = Author
+    success_url = reverse_lazy('authors')
+    permission_required = 'catalog.delete_author'
