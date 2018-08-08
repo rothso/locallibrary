@@ -62,7 +62,7 @@ class Book(models.Model):
 
     def display_genre(self):
         """Returns a genre string (required for the admin panel); note, this query is expensive!"""
-        return ', '.join(genre.name for genre in self.genre.all())[:3]
+        return ', '.join(genre.name for genre in self.genre.all()[:3])
 
     display_genre.short_description = 'Genre'
 
