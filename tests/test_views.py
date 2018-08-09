@@ -245,3 +245,53 @@ class RenewBookViewTest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertFormError(resp, 'form', 'renewal_date',
                              'Invalid date - renewal cannot exceed 4 weeks')
+
+
+class AuthorCreateViewTest(TestCase):
+    PASSWORD = '12345'
+
+    def setUp(self):
+        # Create two users
+        self.user1 = User.objects.create_user(username='testuser1', password=self.PASSWORD)
+        self.user2 = User.objects.create_user(username='testuser2', password=self.PASSWORD)
+
+        # Give user2 permission to create new books
+        permission = Permission.objects.get(name='Can add author')
+        self.user2.user_permissions.add(permission)
+        self.user2.save()
+
+    def test_redirect_if_not_logged_in(self):
+        resp = self.client.get(reverse('author_create'))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp.url.startswith('/accounts/login/'))
+
+    def test_correct_login_but_incorrect_permission(self):
+        self.client.login(username=self.user1.username, password=self.PASSWORD)
+
+        resp = self.client.get(reverse('author_create'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_login_with_permission_can_see_view(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+
+        resp = self.client.get(reverse('author_create'))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_uses_correct_template(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+        resp = self.client.get(reverse('author_create'))
+        self.assertEqual(resp.status_code, 200)
+
+        # Verify we used the correct template
+        self.assertTemplateUsed(resp, 'catalog/author_form.html')
+
+    def test_redirects_to_author_resource_on_success(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+
+        resp = self.client.post(reverse('author_create'), {
+            'first_name': 'John',
+            'last_name': 'Smith',
+            'date_of_birth': '2018-08-09',
+            'date_of_death': '',
+        })
+        self.assertRedirects(resp, '/catalog/author/1')
