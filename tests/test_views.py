@@ -1,6 +1,7 @@
 import datetime
+import uuid
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, Permission
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -46,6 +47,20 @@ class AuthorListViewTest(TestCase):
         self.assertTrue(len(resp.context['author_list']) == 3)
 
 
+def create_book():
+    """Create a test book and save it to the database"""
+    author = Author.objects.create(first_name='John', last_name='Smith')
+    genre = Genre.objects.create(name='Fantasy')
+    language = Language.objects.create(name='English')
+    book = Book.objects.create(title='Book Title', summary='My book summary', isbn='ABCDEFG',
+                               author=author, language=language)
+
+    # Need to separately assign genre (many-to-many field)
+    book.genre.set((genre,))
+    book.save()
+    return book
+
+
 class LoanedBooksByUserListViewTest(TestCase):
     PASSWORD = '12345'
 
@@ -55,15 +70,7 @@ class LoanedBooksByUserListViewTest(TestCase):
         self.user2 = User.objects.create_user(username='testuser2', password=self.PASSWORD)
 
         # Create a book
-        author = Author.objects.create(first_name='John', last_name='Smith')
-        genre = Genre.objects.create(name='Fantasy')
-        language = Language.objects.create(name='English')
-        book = Book.objects.create(title='Book Title', summary='My book summary', isbn='ABCDEFG',
-                                   author=author, language=language)
-
-        # Need to separately assign genre (many-to-many field)
-        book.genre.set((genre,))
-        book.save()
+        book = create_book()
 
         # Create 30 BookInstance objects
         num_book_copies = 30
@@ -137,3 +144,104 @@ class LoanedBooksByUserListViewTest(TestCase):
             if last_date != 0:
                 self.assertLessEqual(last_date, copy.due_back)
             last_date = copy.due_back
+
+
+class RenewBookViewTest(TestCase):
+    PASSWORD = '12345'
+
+    def setUp(self):
+        # Create two users
+        self.user1 = User.objects.create_user(username='testuser1', password=self.PASSWORD)
+        self.user2 = User.objects.create_user(username='testuser2', password=self.PASSWORD)
+
+        # Give user2 permission to renew books
+        permission = Permission.objects.get(codename='can_mark_returned')
+        self.user2.user_permissions.add(permission)
+        self.user2.save()
+
+        # Create a book
+        book = create_book()
+
+        # Create book instances for user1 and user2
+        due_date = datetime.date.today() + datetime.timedelta(days=5)
+        self.copy1 = BookInstance.objects.create(book=book, imprint='2016', due_back=due_date,
+                                                 borrower=self.user1, status='o')
+        self.copy2 = BookInstance.objects.create(book=book, imprint='2016', due_back=due_date,
+                                                 borrower=self.user1, status='o')
+
+    def test_redirect_if_not_logged_in(self):
+        resp = self.client.get(reverse('renew-book', args=[self.copy1.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp.url.startswith('/accounts/login/'))
+
+    def test_redirect_if_logged_in_but_incorrect_permission(self):
+        self.client.login(username=self.user1.username, password=self.PASSWORD)
+
+        resp = self.client.get(reverse('renew-book', args=[self.copy1.pk]))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp.url.startswith('/accounts/login/'))
+
+    def test_login_with_permission_borrowed_book(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+
+        # Verify we can renew our own book (we have permission)
+        resp = self.client.get(reverse('renew-book', args=[self.copy2.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_login_with_permission_another_users_borrowed_book(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+
+        # Verify we can renew any user's book (we're a librarian)
+        resp = self.client.get(reverse('renew-book', args=[self.copy1.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_404_for_invalid_book_if_logged_in(self):
+        fake_uuid = uuid.uuid4()
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+
+        resp = self.client.get(reverse('renew-book', args=[fake_uuid]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_uses_correct_template(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+        resp = self.client.get(reverse('renew-book', args=[self.copy1.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+        # Verify we used the correct template
+        self.assertTemplateUsed(resp, 'catalog/book_renew.html')
+
+    def test_form_renewal_date_initially_three_weeks_in_future(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+        resp = self.client.get(reverse('renew-book', args=[self.copy1.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+        date_3_weeks_in_future = datetime.date.today() + datetime.timedelta(weeks=3)
+        self.assertEqual(resp.context['form'].initial['renewal_date'], date_3_weeks_in_future)
+
+    def test_redirects_to_all_borrowed_books_list_on_success(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+
+        valid_date = datetime.date.today() + datetime.timedelta(weeks=2)
+        resp = self.client.post(reverse('renew-book', args=[self.copy1.pk]),
+                                {'renewal_date': valid_date})
+        self.assertRedirects(resp, reverse('all-borrowed'))
+
+    def test_form_invalid_renewal_date_past(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+
+        past_date = datetime.date.today() - datetime.timedelta(weeks=1)
+        resp = self.client.post(reverse('renew-book', args=[self.copy1.pk]),
+                                {'renewal_date': past_date})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFormError(resp, 'form', 'renewal_date',
+                             'Invalid date - renewal cannot be in the past')
+
+    def test_form_invalid_renewal_date_future(self):
+        self.client.login(username=self.user2.username, password=self.PASSWORD)
+
+        invalid_future_date = datetime.date.today() + datetime.timedelta(weeks=5)
+        resp = self.client.post(reverse('renew-book', args=[self.copy1.pk]),
+                                {'renewal_date': invalid_future_date})
+        self.assertEqual(resp.status_code, 200)
+        self.assertFormError(resp, 'form', 'renewal_date',
+                             'Invalid date - renewal cannot exceed 4 weeks')
